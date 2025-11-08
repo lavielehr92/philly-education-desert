@@ -237,10 +237,11 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
         locations="geoid_bg",
         featureidkey="properties.GEOID",
         color="edi_scaled",
-        custom_data=["NAME"],  # <-- provide custom data for hover
+        # pass both NAME and pct_lt_hs so hovertemplate has [0] and [1]
+        custom_data=["NAME", "pct_lt_hs"],
         hover_data={
-            "NAME": False,  # handled via custom_data to control hover text
-            "pct_lt_hs": ':.1f',
+            "NAME": False,           # handled via custom_data
+            "pct_lt_hs": False,      # handled via custom_data
             "pct_bach_plus": ':.1f',
             "pct_no_vehicle": ':.1f',
             "pct_no_inet": ':.1f',
@@ -251,22 +252,22 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
         labels={"edi_scaled": "Education Desert Index"},
     )
 
-    # crisp polygon borders + readable hover
-    fig.update_traces(
-        marker_line_width=0.6,
-        marker_line_color="black",
-        opacity=0.9,
-        hovertemplate="<b>%{customdata[0]}</b><br>EDI=%{z:.1f}<br>"
-                      "%% < HS=%{customdata[1]:.1f}<extra></extra>"
-    )
-
-    # The hovertemplate above references only customdata[0] (NAME);
-    # if you want to show more, pass them via custom_data=[...] and reference them.
+    # Make polygons readable (no selector; edit first trace directly)
+    if fig.data:
+        fig.data[0].marker.line.width = 0.6
+        fig.data[0].marker.line.color = "black"
+        fig.data[0].opacity = 0.9
+        fig.data[0].hovertemplate = (
+            "<b>%{customdata[0]}</b>"
+            "<br>EDI=%{z:.1f}"
+            "<br>% < HS=%{customdata[1]:.1f}"
+            "<extra></extra>"
+        )
 
     fig.update_geos(fitbounds="locations", visible=False)
     fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
 
-    # Add Cornerstone markers AFTER polygons
+    # Cornerstone markers on top
     if not sites_df.empty:
         fig.add_scattergeo(
             lat=sites_df["lat"],
@@ -279,7 +280,6 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
         )
 
     st.plotly_chart(fig, use_container_width=True)
-
 
 def render_cards(df: pd.DataFrame) -> None:
     st.subheader("Top Education-Desert Block Groups (Philadelphia)")
