@@ -221,7 +221,6 @@ def load_acs_bg(year: int, api_key: Optional[str]) -> pd.DataFrame:
         )
     assert merged is not None
     return compute_metrics(merged)
-
 # -----------------------------
 # UI
 # -----------------------------
@@ -231,13 +230,36 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
 
     geojson = fetch_philly_bg_geojson()
 
+    # --- Make sure every feature has a top-level id for Plotly to join on ---
+    feats = geojson.get("features", [])
+    for f in feats:
+        if "id" not in f or not f["id"]:
+            props = f.get("properties", {})
+            geoid = (
+                str(props.get("GEOID"))
+                or (
+                    str(props.get("STATE", "")).zfill(2)
+                    + str(props.get("COUNTY", "")).zfill(3)
+                    + str(props.get("TRACT", "")).zfill(6)
+                    + str(props.get("BLOCK_GROUP", "")).zfill(1)
+                    if {"STATE", "COUNTY", "TRACT", "BLOCK_GROUP"} <= set(props.keys())
+                    else ""
+                )
+            )
+            f["id"] = geoid
+
+    # Diagnostic: show how many GEOIDs will render
+    geo_ids = {f.get("id", "") for f in feats}
+    match_count = int(df["geoid_bg"].isin(geo_ids).sum())
+    st.caption(f"Geometry match: {match_count} / {len(df)} block groups")
+
     fig = px.choropleth(
         df,
         geojson=geojson,
         locations="geoid_bg",
-        featureidkey="properties.GEOID",
+        featureidkey="id",                 # join using the top-level id we enforced above
         color="edi_scaled",
-        custom_data=["NAME", "pct_lt_hs"],  # for hovertemplate
+        custom_data=["NAME", "pct_lt_hs"], # for compact hover
         hover_data={
             "NAME": False,
             "pct_lt_hs": False,
@@ -251,7 +273,7 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
         labels={"edi_scaled": "Education Desert Index"},
     )
 
-    # Make polygons readable (no selector; edit first trace directly)
+    # Crisp polygon borders + readable hover (no selectors; edit first trace directly)
     if fig.data:
         fig.data[0].marker.line.width = 0.6
         fig.data[0].marker.line.color = "black"
@@ -262,7 +284,7 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
             "<extra></extra>"
         )
     else:
-        st.warning("No geometry drawn — check GEOID join between ACS and TIGER.")
+        st.warning("No choropleth trace created — check the geometry match message above.")
 
     fig.update_geos(fitbounds="locations", visible=False)
     fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
@@ -281,22 +303,40 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
 
     st.plotly_chart(fig, use_container_width=True)
 
+
 def render_cards(df: pd.DataFrame) -> None:
     st.subheader("Top Education-Desert Block Groups (Philadelphia)")
     top = df.sort_values("edi_scaled", ascending=False).head(10).copy()
-    display = top[["NAME","edi_scaled","pct_lt_hs","pct_bach_plus","pct_no_vehicle","pct_no_inet","pct_children","mhhinc_k"]]
+    display = top[[
+        "NAME", "edi_scaled", "pct_lt_hs", "pct_bach_plus",
+        "pct_no_vehicle", "pct_no_inet", "pct_children", "mhhinc_k"
+    ]]
     display = display.rename(columns={
-        "NAME":"Block Group","edi_scaled":"EDI (0–100)","pct_lt_hs":"% < HS",
-        "pct_bach_plus":"% Bachelor's+","pct_no_vehicle":"% HHs No Vehicle",
-        "pct_no_inet":"% HHs No Internet","pct_children":"% < 18","mhhinc_k":"Median HH Income ($k)",
+        "NAME": "Block Group",
+        "edi_scaled": "EDI (0–100)",
+        "pct_lt_hs": "% < HS",
+        "pct_bach_plus": "% Bachelor's+",
+        "pct_no_vehicle": "% HHs No Vehicle",
+        "pct_no_inet": "% HHs No Internet",
+        "pct_children": "% < 18",
+        "mhhinc_k": "Median HH Income ($k)",
     })
-    display = display.round({"edi_scaled":1,"pct_lt_hs":1,"pct_bach_plus":1,"pct_no_vehicle":1,"pct_no_inet":1,"pct_children":1,"mhhinc_k":1})
+    display = display.round({
+        "edi_scaled": 1, "pct_lt_hs": 1, "pct_bach_plus": 1,
+        "pct_no_vehicle": 1, "pct_no_inet": 1, "pct_children": 1, "mhhinc_k": 1
+    })
     st.dataframe(display.fillna(""), use_container_width=True)
+
 
 def render_download(df: pd.DataFrame) -> None:
     csv_bytes = df.to_csv(index=False).encode("utf-8")
-    st.download_button("Download block-group dataset (CSV)", data=csv_bytes,
-                       file_name="philly_education_desert_blockgroups.csv", mime="text/csv")
+    st.download_button(
+        "Download block-group dataset (CSV)",
+        data=csv_bytes,
+        file_name="philly_education_desert_blockgroups.csv",
+        mime="text/csv",
+    )
+
 
 def main() -> None:
     st.set_page_config(page_title="Philadelphia Education Desert (Block Groups)", layout="wide")
@@ -305,9 +345,11 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Controls")
-        year = st.selectbox("ACS 5-year vintage", options=AVAILABLE_YEARS,
-                            index=AVAILABLE_YEARS.index(ACS_YEAR_DEFAULT))
-        # No API key input here—key is secrets-only
+        year = st.selectbox(
+            "ACS 5-year vintage",
+            options=AVAILABLE_YEARS,
+            index=AVAILABLE_YEARS.index(ACS_YEAR_DEFAULT),
+        )
 
     # Read key from secrets/env only
     API_KEY = st.secrets.get("CENSUS_API_KEY", os.getenv("CENSUS_API_KEY", "")) or None
@@ -322,20 +364,26 @@ def main() -> None:
         return
 
     sites = get_site_points(CCA_SITES)
-    tier = st.sidebar.multiselect("Show tiers", ["Higher", "Moderate", "Lower"], default=["Higher", "Moderate", "Lower"])
+    tier = st.sidebar.multiselect(
+        "Show tiers", ["Higher", "Moderate", "Lower"],
+        default=["Higher", "Moderate", "Lower"]
+    )
     view = df[df["edi_tier"].astype(str).isin(tier)].copy()
 
     render_map(view, sites)
     render_cards(view)
     render_download(view)
 
-    st.markdown("""
+    st.markdown(
+        """
 **Methodology (block-group level)**  
 - **Need**: % adults 25+ with <HS (B15003 cells 2–16 / 001) and % population <18 (B09001_001E / B01003_001E).  
 - **Choice Gap**: %<HS offset by low %Bachelor’s+ (B15003 cells 21–24 / 001).  
 - **Access Friction**: % HHs without a vehicle (B08201_002E / 001E), % HHs without Internet (B28002_013E / 001E), and median HH income (B19013_001E, inverted).  
 - **Composite**: z-scored pillars averaged, scaled to 0–100, ranked within **Philadelphia** only.
-""")
+"""
+    )
+
 
 if __name__ == "__main__":
     main()
