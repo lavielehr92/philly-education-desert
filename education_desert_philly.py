@@ -237,8 +237,9 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
         locations="geoid_bg",
         featureidkey="properties.GEOID",
         color="edi_scaled",
+        custom_data=["NAME"],  # <-- provide custom data for hover
         hover_data={
-            "NAME": True,
+            "NAME": False,  # handled via custom_data to control hover text
             "pct_lt_hs": ':.1f',
             "pct_bach_plus": ':.1f',
             "pct_no_vehicle": ':.1f',
@@ -250,21 +251,22 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
         labels={"edi_scaled": "Education Desert Index"},
     )
 
-    # --- Robust outline + opacity (avoid selector) ---
-    if fig.data:
-        # add black outlines so block groups are visible
-        fig.data[0].marker.line.width = 0.5
-        fig.data[0].marker.line.color = "black"
-        # make fill slightly transparent
-        fig.data[0].opacity = 0.9
-        # compact hover
-        fig.data[0].hovertemplate = "%{customdata[0]}<br>EDI=%{z:.1f}<extra></extra>"
+    # crisp polygon borders + readable hover
+    fig.update_traces(
+        marker_line_width=0.6,
+        marker_line_color="black",
+        opacity=0.9,
+        hovertemplate="<b>%{customdata[0]}</b><br>EDI=%{z:.1f}<br>"
+                      "%% < HS=%{customdata[1]:.1f}<extra></extra>"
+    )
 
-    # Fit to Philly and hide globe frame
+    # The hovertemplate above references only customdata[0] (NAME);
+    # if you want to show more, pass them via custom_data=[...] and reference them.
+
     fig.update_geos(fitbounds="locations", visible=False)
     fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
 
-    # Add Cornerstone markers
+    # Add Cornerstone markers AFTER polygons
     if not sites_df.empty:
         fig.add_scattergeo(
             lat=sites_df["lat"],
@@ -276,7 +278,6 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
             name="Cornerstone",
         )
 
-    # Render once
     st.plotly_chart(fig, use_container_width=True)
 
 
