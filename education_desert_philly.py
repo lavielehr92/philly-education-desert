@@ -49,6 +49,13 @@ VARIABLES: Sequence[Variable] = (
     Variable("b09001_u18", "B09001", ["B09001_001E"]),
     Variable("b01003_total_pop", "B01003", ["B01003_001E"]),
     Variable("b19013_mhhinc", "B19013", ["B19013_001E"]),
+    # Additional metrics: poverty, unemployment, renters
+    Variable("b17001_poverty_denom", "B17001", ["B17001_001E"]),
+    Variable("b17001_poverty_num", "B17001", ["B17001_002E"]),
+    Variable("b23025_lf_total", "B23025", ["B23025_001E"]),
+    Variable("b23025_unemployed", "B23025", ["B23025_005E"]),
+    Variable("b25003_tenure_total", "B25003", ["B25003_001E"]),
+    Variable("b25003_renter", "B25003", ["B25003_003E"]),
 )
 
 # -----------------------------
@@ -114,9 +121,14 @@ def compute_metrics(raw: pd.DataFrame) -> pd.DataFrame:
     f["pct_no_vehicle"] = np.where(f["B08201_001E"] > 0, f["B08201_002E"] / f["B08201_001E"] * 100, np.nan)
     f["pct_children"] = np.where(f["B01003_001E"] > 0, f["B09001_001E"] / f["B01003_001E"] * 100, np.nan)
     f["mhhinc_k"] = pd.to_numeric(f["B19013_001E"], errors="coerce") / 1000.0
+    # Additional metrics
+    f["pct_poverty"] = np.where(f["B17001_001E"] > 0, f["B17001_002E"] / f["B17001_001E"] * 100, np.nan)
+    f["pct_unemployed"] = np.where(f["B23025_001E"] > 0, f["B23025_005E"] / f["B23025_001E"] * 100, np.nan)
+    f["pct_renter"] = np.where(f["B25003_001E"] > 0, f["B25003_003E"] / f["B25003_001E"] * 100, np.nan)
 
     # Clean display values
-    for c in ["pct_lt_hs", "pct_bach_plus", "pct_no_inet", "pct_no_vehicle", "pct_children"]:
+    for c in ["pct_lt_hs", "pct_bach_plus", "pct_no_inet", "pct_no_vehicle", "pct_children", 
+              "pct_poverty", "pct_unemployed", "pct_renter"]:
         f[c] = f[c].clip(lower=0, upper=100)
     f["mhhinc_k"] = f["mhhinc_k"].where(f["mhhinc_k"] > 0)
 
@@ -224,7 +236,12 @@ def load_acs_bg(year: int, api_key: Optional[str]) -> pd.DataFrame:
 # -----------------------------
 # UI
 # -----------------------------
-def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
+def render_map(df: pd.DataFrame, sites_df: pd.DataFrame, 
+               metric: str = "edi_scaled", 
+               color_scale: str = "YlOrRd",
+               opacity: float = 0.7,
+               basemap_style: str = "carto-positron") -> None:
+    """Render choropleth map with configurable metric, color scale, and opacity."""
     df = df.copy()
     df["geoid_bg"] = df["geoid_bg"].astype(str)
 
@@ -251,45 +268,93 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
     # Diagnostic: show how many GEOIDs will render
     geo_ids = {f.get("id", "") for f in feats}
     match_count = int(df["geoid_bg"].isin(geo_ids).sum())
-    st.caption(f"Geometry match: {match_count} / {len(df)} block groups")
+    st.caption(f"🗺️ Geometry match: {match_count} / {len(df)} block groups")
+
+    # Prepare custom hover data with all metrics
+    hover_data_dict = {
+        "NAME": False,
+        "geoid_bg": False,
+        metric: ':.1f',
+        "pct_lt_hs": ':.1f',
+        "pct_bach_plus": ':.1f',
+        "pct_no_vehicle": ':.1f',
+        "pct_no_inet": ':.1f',
+        "pct_children": ':.1f',
+        "pct_poverty": ':.1f',
+        "pct_unemployed": ':.1f',
+        "pct_renter": ':.1f',
+        "mhhinc_k": ':.1f',
+    }
+    
+    # Metric label mapping
+    metric_labels = {
+        "edi_scaled": "Education Desert Index",
+        "pct_lt_hs": "% < HS",
+        "pct_bach_plus": "% Bachelor's+",
+        "pct_no_vehicle": "% HHs No Vehicle",
+        "pct_no_inet": "% HHs No Internet",
+        "pct_children": "% < 18",
+        "pct_poverty": "% Poverty",
+        "pct_unemployed": "% Unemployed",
+        "pct_renter": "% Renter",
+        "mhhinc_k": "Median HH Income ($k)",
+    }
 
     fig = px.choropleth(
         df,
         geojson=geojson,
         locations="geoid_bg",
         featureidkey="id",                 # join using the top-level id we enforced above
-        color="edi_scaled",
-        custom_data=["NAME", "pct_lt_hs"], # for compact hover
-        hover_data={
-            "NAME": False,
-            "pct_lt_hs": False,
-            "pct_bach_plus": ':.1f',
-            "pct_no_vehicle": ':.1f',
-            "pct_no_inet": ':.1f',
-            "pct_children": ':.1f',
-            "mhhinc_k": ':.1f',
-        },
-        color_continuous_scale="YlOrRd",
-        labels={"edi_scaled": "Education Desert Index"},
+        color=metric,
+        custom_data=["NAME", "geoid_bg", metric, "pct_lt_hs", "pct_bach_plus", "pct_no_vehicle", 
+                     "pct_no_inet", "pct_children", "pct_poverty", "pct_unemployed", "pct_renter", "mhhinc_k"],
+        hover_data=hover_data_dict,
+        color_continuous_scale=color_scale,
+        labels={metric: metric_labels.get(metric, metric)},
     )
 
-    # Crisp polygon borders + readable hover (no selectors; edit first trace directly)
+    # Crisp polygon borders + readable hover
     if fig.data:
         fig.data[0].marker.line.width = 0.6
         fig.data[0].marker.line.color = "black"
+        fig.data[0].marker.opacity = opacity
+        # Enhanced hover template with all metrics
         fig.data[0].hovertemplate = (
-            "<b>%{customdata[0]}</b>"
-            "<br>EDI=%{z:.1f}"
-            "<br>% < HS=%{customdata[1]:.1f}"
+            "<b>%{customdata[0]}</b><br>"
+            f"<b>{metric_labels.get(metric, metric)}=%{{customdata[2]:.1f}}</b><br>"
+            "<br><i>Education Metrics:</i><br>"
+            "% < HS: %{customdata[3]:.1f}%<br>"
+            "% Bachelor's+: %{customdata[4]:.1f}%<br>"
+            "<br><i>Access Metrics:</i><br>"
+            "% No Vehicle: %{customdata[5]:.1f}%<br>"
+            "% No Internet: %{customdata[6]:.1f}%<br>"
+            "<br><i>Demographics:</i><br>"
+            "% < 18: %{customdata[7]:.1f}%<br>"
+            "% Poverty: %{customdata[8]:.1f}%<br>"
+            "% Unemployed: %{customdata[9]:.1f}%<br>"
+            "% Renter: %{customdata[10]:.1f}%<br>"
+            "Med HH Income: $%{customdata[11]:.1f}k<br>"
             "<extra></extra>"
         )
     else:
-        st.warning("No choropleth trace created — check the geometry match message above.")
+        st.warning("⚠️ No choropleth trace created — check the geometry match message above.")
 
     fig.update_geos(fitbounds="locations", visible=False)
+    
+    # Apply basemap style
+    if basemap_style != "none":
+        fig.update_geos(
+            projection_type="mercator",
+            showcountries=False,
+            showcoastlines=False,
+            showland=True,
+            landcolor="lightgray",
+            bgcolor="white"
+        )
+    
     fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
 
-    # Cornerstone markers on top
+    # Cornerstone markers on top with enhanced visibility
     if not sites_df.empty:
         fig.add_scattergeo(
             lat=sites_df["lat"],
@@ -297,19 +362,60 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
             text=sites_df["name"],
             mode="markers+text",
             textposition="top center",
-            marker=dict(size=10, symbol="star", line=dict(width=1)),
-            name="Cornerstone",
+            textfont=dict(size=12, color="darkblue", family="Arial Black"),
+            marker=dict(size=15, symbol="star", color="gold", line=dict(width=2, color="darkblue")),
+            name="Cornerstone Sites",
+            showlegend=True,
         )
 
     st.plotly_chart(fig, use_container_width=True)
 
 
 def render_cards(df: pd.DataFrame) -> None:
-    st.subheader("Top Education-Desert Block Groups (Philadelphia)")
+    """Display highlight cards and top education-desert block groups table."""
+    # Highlight cards with key statistics
+    st.subheader("📊 Key Statistics - Philadelphia Block Groups")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            label="Total Block Groups",
+            value=f"{len(df):,}",
+            help="Number of block groups analyzed"
+        )
+    
+    with col2:
+        avg_edi = df["edi_scaled"].mean()
+        st.metric(
+            label="Avg Education Desert Index",
+            value=f"{avg_edi:.1f}",
+            help="Average EDI score across all block groups"
+        )
+    
+    with col3:
+        high_need = (df["edi_scaled"] >= df["edi_scaled"].quantile(0.75)).sum()
+        st.metric(
+            label="High-Need Areas",
+            value=f"{high_need:,}",
+            help="Block groups in top 25% EDI (highest need)"
+        )
+    
+    with col4:
+        avg_poverty = df["pct_poverty"].mean()
+        st.metric(
+            label="Avg Poverty Rate",
+            value=f"{avg_poverty:.1f}%",
+            help="Average poverty rate across block groups"
+        )
+    
+    st.markdown("---")
+    
+    st.subheader("🎯 Top Education-Desert Block Groups (Philadelphia)")
     top = df.sort_values("edi_scaled", ascending=False).head(10).copy()
     display = top[[
         "NAME", "edi_scaled", "pct_lt_hs", "pct_bach_plus",
-        "pct_no_vehicle", "pct_no_inet", "pct_children", "mhhinc_k"
+        "pct_no_vehicle", "pct_no_inet", "pct_children", "pct_poverty", 
+        "pct_unemployed", "pct_renter", "mhhinc_k"
     ]]
     display = display.rename(columns={
         "NAME": "Block Group",
@@ -319,13 +425,17 @@ def render_cards(df: pd.DataFrame) -> None:
         "pct_no_vehicle": "% HHs No Vehicle",
         "pct_no_inet": "% HHs No Internet",
         "pct_children": "% < 18",
+        "pct_poverty": "% Poverty",
+        "pct_unemployed": "% Unemployed",
+        "pct_renter": "% Renter",
         "mhhinc_k": "Median HH Income ($k)",
     })
     display = display.round({
-        "edi_scaled": 1, "pct_lt_hs": 1, "pct_bach_plus": 1,
-        "pct_no_vehicle": 1, "pct_no_inet": 1, "pct_children": 1, "mhhinc_k": 1
+        "EDI (0–100)": 1, "% < HS": 1, "% Bachelor's+": 1,
+        "% HHs No Vehicle": 1, "% HHs No Internet": 1, "% < 18": 1,
+        "% Poverty": 1, "% Unemployed": 1, "% Renter": 1, "Median HH Income ($k)": 1
     })
-    st.dataframe(display.fillna(""), use_container_width=True)
+    st.dataframe(display.fillna(""), use_container_width=True, height=400)
 
 
 def render_download(df: pd.DataFrame) -> None:
@@ -338,53 +448,209 @@ def render_download(df: pd.DataFrame) -> None:
     )
 
 
+
+
 def main() -> None:
     st.set_page_config(page_title="Philadelphia Education Desert (Block Groups)", layout="wide")
-    st.title("Philadelphia Education Desert Dashboard — Block-Group View")
+    st.title("📚 Philadelphia Education Desert Dashboard — Block-Group View")
     st.caption("ACS 5-year detailed tables at block-group level; composite index is relative within Philadelphia.")
 
     with st.sidebar:
-        st.header("Controls")
+        st.header("⚙️ Controls")
+        
+        # Year selector
         year = st.selectbox(
             "ACS 5-year vintage",
             options=AVAILABLE_YEARS,
             index=AVAILABLE_YEARS.index(ACS_YEAR_DEFAULT),
         )
+        
+        st.markdown("---")
+        st.subheader("🗺️ Map Settings")
+        
+        # Metric selector
+        metric_options = {
+            "Education Desert Index": "edi_scaled",
+            "% < HS": "pct_lt_hs",
+            "% Bachelor's+": "pct_bach_plus",
+            "% No Vehicle": "pct_no_vehicle",
+            "% No Internet": "pct_no_inet",
+            "% Children": "pct_children",
+            "% Poverty": "pct_poverty",
+            "% Unemployed": "pct_unemployed",
+            "% Renter": "pct_renter",
+            "Median HH Income ($k)": "mhhinc_k",
+        }
+        selected_metric_label = st.selectbox(
+            "Map Metric",
+            options=list(metric_options.keys()),
+            index=0,
+            help="Select which metric to display on the map"
+        )
+        selected_metric = metric_options[selected_metric_label]
+        
+        # Color scale selector
+        color_scale = st.selectbox(
+            "Color Scale",
+            options=["YlOrRd", "RdYlGn_r", "Blues", "Viridis", "Plasma", "Inferno", "Turbo"],
+            index=0,
+            help="Color scheme for the map"
+        )
+        
+        # Opacity slider
+        opacity = st.slider(
+            "Map Opacity",
+            min_value=0.1,
+            max_value=1.0,
+            value=0.7,
+            step=0.1,
+            help="Adjust transparency of map colors"
+        )
+        
+        # Basemap style
+        basemap_style = st.selectbox(
+            "Basemap Style",
+            options=["none", "carto-positron", "open-street-map", "white-bg"],
+            index=0,
+            help="Background map style"
+        )
+        
+        st.markdown("---")
+        st.subheader("🎯 Filters")
+        
+        # Tier filter
+        tier = st.multiselect(
+            "Show EDI Tiers", 
+            ["Higher", "Moderate", "Lower"],
+            default=["Higher", "Moderate", "Lower"],
+            help="Filter block groups by Education Desert Index tier"
+        )
 
-    # Read key from secrets/env only
+    # Read key from secrets/env with clear messaging
     API_KEY = st.secrets.get("CENSUS_API_KEY", os.getenv("CENSUS_API_KEY", "")) or None
 
-    # Helpful status chip
-    st.info("Census key loaded from secrets." if API_KEY else "No Census key found in secrets.", icon="🔑")
+    # Helpful status chip with better messaging
+    if API_KEY:
+        st.success("✅ Census API key loaded from secrets.", icon="🔑")
+    else:
+        st.error(
+            "❌ No Census API key found. Please add `CENSUS_API_KEY` to `.streamlit/secrets.toml` "
+            "or set it as an environment variable. Get your free key at: https://api.census.gov/data/key_signup.html",
+            icon="🔑"
+        )
+        st.stop()
 
+    # Load data with spinner
     try:
-        df = load_acs_bg(year, API_KEY)
+        with st.spinner("Loading ACS data..."):
+            df = load_acs_bg(year, API_KEY)
     except Exception as e:
-        st.error(f"Data load failed: {e}")
+        st.error(f"❌ Data load failed: {e}")
+        st.info("💡 If you're seeing an API error, check your API key or try again later (Census API has rate limits).")
         return
 
+    # Get site points
     sites = get_site_points(CCA_SITES)
-    tier = st.sidebar.multiselect(
-        "Show tiers", ["Higher", "Moderate", "Lower"],
-        default=["Higher", "Moderate", "Lower"]
-    )
-    view = df[df["edi_tier"].astype(str).isin(tier)].copy()
+    
+    # Apply tier filter
+    view = df[df["edi_tier"].astype(str).isin(tier)].copy() if tier else df.copy()
 
-    render_map(view, sites)
-    render_cards(view)
-    render_download(view)
+    # Tabbed interface
+    tab1, tab2, tab3, tab4 = st.tabs(["📍 Map View", "🏆 Rankings", "📊 Detailed Data", "⬇️ Download"])
+    
+    with tab1:
+        st.subheader(f"Map: {selected_metric_label}")
+        render_map(view, sites, metric=selected_metric, color_scale=color_scale, 
+                   opacity=opacity, basemap_style=basemap_style)
+    
+    with tab2:
+        render_cards(view)
+    
+    with tab3:
+        st.subheader("📊 Complete Block Group Data")
+        st.caption(f"Showing {len(view)} of {len(df)} block groups (filtered by tier selection)")
+        
+        # Full data table with all metrics
+        detail_cols = [
+            "NAME", "geoid_bg", "edi_scaled", "edi_tier",
+            "pct_lt_hs", "pct_bach_plus", "pct_no_vehicle", "pct_no_inet", 
+            "pct_children", "pct_poverty", "pct_unemployed", "pct_renter", "mhhinc_k"
+        ]
+        detail_df = view[detail_cols].copy()
+        detail_df = detail_df.rename(columns={
+            "NAME": "Block Group",
+            "geoid_bg": "GEOID",
+            "edi_scaled": "EDI (0–100)",
+            "edi_tier": "EDI Tier",
+            "pct_lt_hs": "% < HS",
+            "pct_bach_plus": "% Bachelor's+",
+            "pct_no_vehicle": "% No Vehicle",
+            "pct_no_inet": "% No Internet",
+            "pct_children": "% < 18",
+            "pct_poverty": "% Poverty",
+            "pct_unemployed": "% Unemployed",
+            "pct_renter": "% Renter",
+            "mhhinc_k": "Med HH Inc ($k)",
+        })
+        
+        # Sort by EDI descending
+        detail_df = detail_df.sort_values("EDI (0–100)", ascending=False)
+        
+        st.dataframe(detail_df.fillna(""), use_container_width=True, height=600)
+    
+    with tab4:
+        st.subheader("⬇️ Download Data")
+        st.write("Download the complete block-group dataset with all calculated metrics.")
+        render_download(view)
+        
+        st.markdown("---")
+        st.info(
+            "**Data includes:** Block group identifiers, Education Desert Index scores, "
+            "educational attainment, access metrics (vehicle/internet), demographics "
+            "(children, poverty, unemployment, renters), and median household income."
+        )
 
-    st.markdown(
-        """
-**Methodology (block-group level)**  
-- **Need**: % adults 25+ with <HS (B15003 cells 2–16 / 001) and % population <18 (B09001_001E / B01003_001E).  
-- **Choice Gap**: %<HS offset by low %Bachelor’s+ (B15003 cells 21–24 / 001).  
-- **Access Friction**: % HHs without a vehicle (B08201_002E / 001E), % HHs without Internet (B28002_013E / 001E), and median HH income (B19013_001E, inverted).  
-- **Composite**: z-scored pillars averaged, scaled to 0–100, ranked within **Philadelphia** only.
+    # Methodology section
+    with st.expander("📖 Methodology & Data Sources"):
+        st.markdown(
+            """
+### Methodology (Block-Group Level)
+
+**Education Desert Index (EDI)** combines three pillars:
+
+1. **Need Score**  
+   - % adults 25+ with < HS diploma (B15003 cells 2–16 / 001)  
+   - % population under 18 (B09001_001E / B01003_001E)
+
+2. **Choice Gap Score**  
+   - % < HS offset by low % Bachelor's+ (B15003 cells 21–24 / 001)
+
+3. **Access Friction Score**  
+   - % households without a vehicle (B08201_002E / 001E)  
+   - % households without Internet (B28002_013E / 001E)  
+   - Median HH income (B19013_001E, inverted for scoring)
+
+**Additional Metrics:**
+- **Poverty**: % below poverty line (B17001_002E / B17001_001E)
+- **Unemployment**: % unemployed in labor force (B23025_005E / B23025_001E)  
+- **Renters**: % renter-occupied housing units (B25003_003E / B25003_001E)
+
+**Composite**: All pillars are z-scored, averaged, and scaled to 0–100. Rankings are relative within **Philadelphia County** only.
+
+### Data Sources
+- **ACS 5-Year Estimates**: US Census Bureau American Community Survey
+- **Geography**: TIGERweb Block Group boundaries for Philadelphia County (FIPS 42101)
+- **Cornerstone Sites**: Geocoded via Census Geocoding API
 """
+        )
+
+    # Footer
+    st.markdown("---")
+    st.caption(
+        "Built with Streamlit • Data from US Census Bureau ACS 5-Year Estimates • "
+        f"Viewing {year} vintage"
     )
 
 
 if __name__ == "__main__":
     main()
-
