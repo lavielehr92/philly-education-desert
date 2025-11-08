@@ -237,11 +237,10 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
         locations="geoid_bg",
         featureidkey="properties.GEOID",
         color="edi_scaled",
-        # pass both NAME and pct_lt_hs so hovertemplate has [0] and [1]
-        custom_data=["NAME", "pct_lt_hs"],
+        custom_data=["NAME", "pct_lt_hs"],  # for hovertemplate
         hover_data={
-            "NAME": False,           # handled via custom_data
-            "pct_lt_hs": False,      # handled via custom_data
+            "NAME": False,
+            "pct_lt_hs": False,
             "pct_bach_plus": ':.1f',
             "pct_no_vehicle": ':.1f',
             "pct_no_inet": ':.1f',
@@ -256,13 +255,14 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
     if fig.data:
         fig.data[0].marker.line.width = 0.6
         fig.data[0].marker.line.color = "black"
-        fig.data[0].opacity = 0.9
         fig.data[0].hovertemplate = (
             "<b>%{customdata[0]}</b>"
             "<br>EDI=%{z:.1f}"
             "<br>% < HS=%{customdata[1]:.1f}"
             "<extra></extra>"
         )
+    else:
+        st.warning("No geometry drawn — check GEOID join between ACS and TIGER.")
 
     fig.update_geos(fitbounds="locations", visible=False)
     fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
