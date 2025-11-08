@@ -226,7 +226,16 @@ def load_acs_bg(year: int, api_key: Optional[str]) -> pd.DataFrame:
 # UI
 # -----------------------------
 def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
+    # Ensure join keys are strings
+    df = df.copy()
+    df["geoid_bg"] = df["geoid_bg"].astype(str)
+
     geojson = fetch_philly_bg_geojson()
+
+    # OPTIONAL one-liner to debug joins (uncomment if needed)
+    # matched = sum(df["geoid_bg"].isin({f["properties"]["GEOID"] for f in geojson.get("features", [])}))
+    # st.caption(f"{matched} / {len(df)} block groups matched to geometry")
+
     fig = px.choropleth(
         df,
         geojson=geojson,
@@ -244,17 +253,37 @@ def render_map(df: pd.DataFrame, sites_df: pd.DataFrame) -> None:
         },
         color_continuous_scale="YlOrRd",
         labels={"edi_scaled": "Education Desert Index"},
-        scope=None,
     )
+
+    # Make blocks visible & crisp
+    fig.update_traces(
+        selector=dict(type="choropleth"),
+        marker_line_width=0.5,
+        marker_line_color="black",
+        hovertemplate="%{customdata[0]}<br>EDI=%{z:.1f}<extra></extra>",
+        opacity=0.9,
+    )
+
+    # Fit to Philly geometry and hide the empty globe frame
     fig.update_geos(fitbounds="locations", visible=False)
+
     fig.update_layout(margin=dict(l=0, r=0, t=0, b=0))
-    if not sites_df.empty:
-        fig.add_scattergeo(
-            lat=sites_df["lat"], lon=sites_df["lon"], text=sites_df["name"],
-            mode="markers+text", textposition="top center",
-            marker=dict(size=10, symbol="star", line=dict(width=1)), name="Cornerstone",
-        )
     st.plotly_chart(fig, use_container_width=True)
+
+    # Cornerstone markers (draw after polygons)
+    if not sites_df.empty:
+        st.plotly_chart(
+            fig.add_scattergeo(
+                lat=sites_df["lat"],
+                lon=sites_df["lon"],
+                text=sites_df["name"],
+                mode="markers+text",
+                textposition="top center",
+                marker=dict(size=10, symbol="star", line=dict(width=1)),
+                name="Cornerstone",
+            ),
+            use_container_width=True,
+        )
 
 def render_cards(df: pd.DataFrame) -> None:
     st.subheader("Top Education-Desert Block Groups (Philadelphia)")
